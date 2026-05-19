@@ -2,17 +2,21 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
 import statsmodels.api as sm
 
+
 st.set_page_config(
-    page_title="Analiza activitatii organizatiei",
+    page_title="Analiza activitatii unei organizatii medicale",
     layout="wide"
 )
 
@@ -68,42 +72,27 @@ st.markdown("""
     <h1>Analiza activitatii unei organizatii medicale</h1>
     <p>
         Proiect realizat in Python folosind Streamlit, Pandas,
-        Scikit-learn si Statsmodels.
+        Matplotlib, Seaborn, Scikit-learn si Statsmodels.
     </p>
 </div>
 """, unsafe_allow_html=True)
 
-df = pd.read_csv("medical_students_dataset.csv")
 
-st.header("1. Setul de date initial")
-st.dataframe(df)
+file_path = "medical_students_dataset.csv"
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.metric("Numar randuri", df.shape[0])
-
-with col2:
-    st.metric("Numar coloane", df.shape[1])
-
-st.subheader("Tipurile de date")
-st.write(df.dtypes)
-
-st.header("2. Tratarea valorilor lipsa")
-
-st.subheader("Valori lipsa inainte de prelucrare")
-st.write(df.isnull().sum())
+df_initial = pd.read_csv(file_path)
+df = df_initial.copy()
 
 df = df.replace([np.inf, -np.inf], np.nan)
 
-numeric_columns = df.select_dtypes(include=np.number).columns
+numeric_columns_initial = df.select_dtypes(include=np.number).columns
 
-for col in numeric_columns:
+for col in numeric_columns_initial:
     df[col] = df[col].fillna(df[col].mean())
 
-categorical_columns = df.select_dtypes(include="object").columns
+categorical_columns_initial = df.select_dtypes(include="object").columns
 
-for col in categorical_columns:
+for col in categorical_columns_initial:
     df[col] = df[col].fillna(df[col].mode()[0])
 
 if "Age" in df.columns:
@@ -112,274 +101,769 @@ if "Age" in df.columns:
     df["Age"] = df["Age"].fillna(df["Age"].mean())
     df["Age"] = df["Age"].round(0).astype(int)
 
-df.to_csv("medical_students_dataset_cleaned.csv", index=False)
+df_cleaned = df.copy()
+df_cleaned.to_csv("medical_students_dataset_cleaned.csv", index=False)
 
-st.success("Valorile lipsa au fost completate")
-st.info("Fisier salvat: medical_students_dataset_cleaned.csv")
+if "BMI" in df_cleaned.columns:
+    Q1 = df_cleaned["BMI"].quantile(0.25)
+    Q3 = df_cleaned["BMI"].quantile(0.75)
 
-st.subheader("Valori lipsa dupa prelucrare")
-st.write(df.isnull().sum())
+    IQR = Q3 - Q1
 
-st.header("3. Tratarea valorilor extreme")
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
 
-fig1, ax1 = plt.subplots(figsize=(5, 2.5))
-df.boxplot(column="BMI", ax=ax1)
-ax1.set_title("Boxplot BMI")
-st.pyplot(fig1)
+    df_cleaned = df_cleaned[
+        (df_cleaned["BMI"] >= lower) &
+        (df_cleaned["BMI"] <= upper)
+    ]
 
-Q1 = df["BMI"].quantile(0.25)
-Q3 = df["BMI"].quantile(0.75)
+df_cleaned.to_csv("medical_students_dataset_without_outliers.csv", index=False)
 
-IQR = Q3 - Q1
-
-lower = Q1 - 1.5 * IQR
-upper = Q3 + 1.5 * IQR
-
-df = df[(df["BMI"] >= lower) & (df["BMI"] <= upper)]
-
-df.to_csv("medical_students_dataset_without_outliers.csv", index=False)
-
-st.write("Dimensiunea datasetului dupa eliminarea outlierilor:")
-st.write(df.shape)
-
-st.info("Fisier salvat: medical_students_dataset_without_outliers.csv")
-
-st.header("4. Codificarea datelor")
+df_encoded = df_cleaned.copy()
 
 encoder = LabelEncoder()
 
-if "Gender" in df.columns:
-    df["Gender"] = encoder.fit_transform(df["Gender"])
+for col in ["Gender", "Diabetes", "Smoking"]:
+    if col in df_encoded.columns:
+        df_encoded[col] = encoder.fit_transform(df_encoded[col])
 
-if "Diabetes" in df.columns:
-    df["Diabetes"] = encoder.fit_transform(df["Diabetes"])
-
-if "Smoking" in df.columns:
-    df["Smoking"] = encoder.fit_transform(df["Smoking"])
-
-if "Blood Type" in df.columns:
+if "Blood Type" in df_encoded.columns:
     blood_type_encoded = pd.get_dummies(
-        df["Blood Type"],
-        prefix="Blood"
+        df_encoded["Blood Type"],
+        prefix="Blood",
+        dtype=int
     )
 
-    df = pd.concat([df, blood_type_encoded], axis=1)
-    df.drop("Blood Type", axis=1, inplace=True)
+    df_encoded = pd.concat(
+        [df_encoded, blood_type_encoded],
+        axis=1
+    )
 
-df.to_csv("medical_students_dataset_encoded.csv", index=False)
+    df_encoded.drop(
+        "Blood Type",
+        axis=1,
+        inplace=True
+    )
 
-st.success("Datele categorice au fost codificate")
-st.info("Fisier salvat: medical_students_dataset_encoded.csv")
+df_encoded.to_csv("medical_students_dataset_encoded.csv", index=False)
 
-st.dataframe(df.head())
-
-st.header("5. Scalarea datelor")
-
-numeric_columns_after_encoding = df.select_dtypes(include=np.number).columns
+numeric_columns = df_encoded.select_dtypes(include=np.number).columns
 
 scaler_standard = StandardScaler()
 
-scaled_standard = scaler_standard.fit_transform(
-    df[numeric_columns_after_encoding]
+df_standardized = df_encoded.copy()
+
+df_standardized[numeric_columns] = scaler_standard.fit_transform(
+    df_standardized[numeric_columns]
 )
 
-df_standard = pd.DataFrame(
-    scaled_standard,
-    columns=numeric_columns_after_encoding
-)
+df_standardized[numeric_columns] = df_standardized[numeric_columns].round(4)
 
-df_standard.to_csv("medical_students_dataset_standardized.csv", index=False)
-
-st.subheader("StandardScaler")
-st.dataframe(df_standard.head())
-st.info("Fisier salvat: medical_students_dataset_standardized.csv")
+df_standardized.to_csv("medical_students_dataset_standardized_output.csv", index=False)
 
 scaler_minmax = MinMaxScaler()
 
-scaled_minmax = scaler_minmax.fit_transform(
-    df[numeric_columns_after_encoding]
+df_minmax = df_encoded.copy()
+
+df_minmax[numeric_columns] = scaler_minmax.fit_transform(
+    df_minmax[numeric_columns]
 )
 
-df_minmax = pd.DataFrame(
-    scaled_minmax,
-    columns=numeric_columns_after_encoding
+df_minmax[numeric_columns] = df_minmax[numeric_columns].round(4)
+
+df_minmax.to_csv("medical_students_dataset_minmax_output.csv", index=False)
+
+
+st.sidebar.title("Navigare")
+
+option = st.sidebar.radio(
+    "Alege sectiunea:",
+    [
+        "Set de date",
+        "Valori lipsa si outliers",
+        "Codificare si scalare",
+        "Statistici descriptive",
+        "Grupare si agregare",
+        "Histograma",
+        "Prelucrari avansate",
+        "Interactiuni coloane",
+        "Vizualizare outliers"
+    ]
 )
 
-df_minmax.to_csv("medical_students_dataset_minmax.csv", index=False)
 
-st.subheader("MinMaxScaler")
-st.dataframe(df_minmax.head())
-st.info("Fisier salvat: medical_students_dataset_minmax.csv")
+if option == "Set de date":
 
-st.header("6. Statistici descriptive")
+    st.header("1. Setul de date initial")
 
-st.subheader("Statistici generale")
-st.write(df.describe())
+    st.dataframe(
+        df_initial.head(100),
+        use_container_width=True
+    )
 
-st.subheader("Media")
-st.write(df.mean(numeric_only=True))
+    col1, col2, col3 = st.columns(3)
 
-st.subheader("Mediana")
-st.write(df.median(numeric_only=True))
+    with col1:
+        st.metric("Numar randuri", df_initial.shape[0])
 
-st.subheader("Suma")
-st.write(df.sum(numeric_only=True))
+    with col2:
+        st.metric("Numar coloane", df_initial.shape[1])
 
-statistics_df = pd.DataFrame({
-    "Media": df.mean(numeric_only=True),
-    "Mediana": df.median(numeric_only=True),
-    "Suma": df.sum(numeric_only=True)
-})
+    with col3:
+        st.metric("Valori lipsa totale", int(df_initial.isnull().sum().sum()))
 
-statistics_df.to_csv("medical_students_statistics.csv")
+    st.subheader("Tipurile de date")
 
-st.info("Fisier salvat: medical_students_statistics.csv")
+    st.write(df_initial.dtypes)
 
-st.header("7. Grupare si agregare")
+    st.subheader("Primele 10 randuri dupa curatare")
 
-group_gender = df.groupby("Gender")["BMI"].mean().reset_index()
-group_gender.columns = ["Gender", "BMI_Mediu"]
+    st.dataframe(
+        df_cleaned.head(10),
+        use_container_width=True
+    )
 
-st.subheader("Media BMI in functie de gen")
-st.write(group_gender)
 
-group_gender.to_csv("medical_students_group_gender.csv", index=False)
+if option == "Valori lipsa si outliers":
 
-group_smoking = df.groupby("Smoking")["Cholesterol"].mean().reset_index()
-group_smoking.columns = ["Smoking", "Colesterol_Mediu"]
+    st.header("2. Tratarea valorilor lipsa")
 
-st.subheader("Media colesterolului in functie de fumat")
-st.write(group_smoking)
+    st.subheader("Valori lipsa inainte de prelucrare")
 
-group_smoking.to_csv("medical_students_group_smoking.csv", index=False)
+    st.dataframe(
+        df_initial.isnull().sum().reset_index().rename(
+            columns={
+                "index": "Coloana",
+                0: "Numar valori lipsa"
+            }
+        ),
+        use_container_width=True
+    )
 
-st.info("Fisiere salvate: medical_students_group_gender.csv si medical_students_group_smoking.csv")
+    st.subheader("Valori lipsa dupa prelucrare")
 
-st.header("8. Histograma")
+    st.dataframe(
+        df_cleaned.isnull().sum().reset_index().rename(
+            columns={
+                "index": "Coloana",
+                0: "Numar valori lipsa"
+            }
+        ),
+        use_container_width=True
+    )
 
-fig2, ax2 = plt.subplots(figsize=(5, 2.5))
+    st.header("3. Tratarea valorilor extreme")
 
-ax2.hist(df["Age"], bins=10)
+    fig1, ax1 = plt.subplots(figsize=(4, 2))
 
-ax2.set_title("Distributia varstei")
-ax2.set_xlabel("Varsta")
-ax2.set_ylabel("Frecventa")
+    sns.boxplot(
+        x=df_initial["BMI"],
+        ax=ax1
+    )
 
-st.pyplot(fig2)
+    ax1.set_title("Boxplot BMI inainte de tratarea outlierilor")
 
-st.header("9. Clusterizare KMeans")
+    st.pyplot(fig1)
 
-features = df[["Age", "BMI", "Heart Rate"]]
+    plt.close()
 
-kmeans = KMeans(
-    n_clusters=3,
-    random_state=42
-)
+    fig2, ax2 = plt.subplots(figsize=(4, 2))
 
-df["Cluster"] = kmeans.fit_predict(features)
+    sns.boxplot(
+        x=df_cleaned["BMI"],
+        ax=ax2
+    )
 
-cluster_results = df[[
-    "Age",
-    "BMI",
-    "Heart Rate",
-    "Cluster"
-]]
+    ax2.set_title("Boxplot BMI dupa tratarea outlierilor")
 
-cluster_results.to_csv("medical_students_kmeans_clusters.csv", index=False)
+    st.pyplot(fig2)
 
-st.write(cluster_results.head())
+    plt.close()
 
-st.info("Fisier salvat: medical_students_kmeans_clusters.csv")
+    st.success("Dataseturile curatate au fost salvate in fisiere CSV.")
 
-fig3, ax3 = plt.subplots(figsize=(5, 3))
 
-ax3.scatter(
-    df["Age"],
-    df["BMI"],
-    c=df["Cluster"]
-)
+if option == "Codificare si scalare":
 
-ax3.set_xlabel("Age")
-ax3.set_ylabel("BMI")
-ax3.set_title("Clusterizare KMeans")
+    st.header("4. Codificarea datelor")
 
-st.pyplot(fig3)
+    st.subheader("Date dupa codificare")
 
-st.header("10. Regresie logistica")
+    st.dataframe(
+        df_encoded.head(10),
+        use_container_width=True
+    )
 
-X = df[["Age", "BMI", "Heart Rate"]]
-y = df["Diabetes"]
+    st.info("Variabilele categorice au fost transformate in variabile numerice.")
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.3,
-    random_state=42
-)
+    st.header("5. Scalarea datelor")
 
-model = LogisticRegression(max_iter=1000)
+    st.subheader("StandardScaler")
 
-model.fit(X_train, y_train)
+    st.dataframe(
+        df_standardized.head(10),
+        use_container_width=True
+    )
 
-predictions = model.predict(X_test)
+    st.subheader("MinMaxScaler")
 
-accuracy = accuracy_score(
-    y_test,
-    predictions
-)
+    st.dataframe(
+        df_minmax.head(10),
+        use_container_width=True
+    )
 
-st.subheader("Acuratete model")
-st.metric("Accuracy", round(accuracy, 2))
 
-st.subheader("Matrice de confuzie")
-conf_matrix = confusion_matrix(y_test, predictions)
-st.write(conf_matrix)
+if option == "Statistici descriptive":
 
-logistic_results = pd.DataFrame({
-    "Valori reale": y_test.values,
-    "Predictii": predictions
-})
+    st.header("6. Statistici descriptive")
 
-logistic_results.to_csv("medical_students_logistic_regression_results.csv", index=False)
+    stats = df_encoded.describe().round(4)
 
-confusion_df = pd.DataFrame(conf_matrix)
-confusion_df.to_csv("medical_students_confusion_matrix.csv", index=False)
+    st.subheader("Statistici generale")
 
-st.info("Fisiere salvate: medical_students_logistic_regression_results.csv si medical_students_confusion_matrix.csv")
+    st.dataframe(
+        stats,
+        use_container_width=True
+    )
 
-st.header("11. Regresie multipla cu Statsmodels")
+    st.subheader("Media valorilor numerice")
 
-X_stats = df[[
-    "Age",
-    "BMI",
-    "Heart Rate"
-]]
+    mean_values = df_encoded.mean(numeric_only=True).round(4)
 
-X_stats = sm.add_constant(X_stats)
+    st.dataframe(
+        mean_values.reset_index().rename(
+            columns={
+                "index": "Coloana",
+                0: "Media"
+            }
+        ),
+        use_container_width=True
+    )
 
-y_stats = df["Cholesterol"]
+    st.subheader("Mediana valorilor numerice")
 
-model_stats = sm.OLS(
-    y_stats,
-    X_stats
-).fit()
+    median_values = df_encoded.median(numeric_only=True).round(4)
 
-st.text(model_stats.summary())
+    st.dataframe(
+        median_values.reset_index().rename(
+            columns={
+                "index": "Coloana",
+                0: "Mediana"
+            }
+        ),
+        use_container_width=True
+    )
 
-statsmodels_params = pd.DataFrame({
-    "Coeficient": model_stats.params,
-    "P_value": model_stats.pvalues
-})
+    st.subheader("Suma valorilor numerice")
 
-statsmodels_params.to_csv("medical_students_statsmodels_regression.csv")
+    sum_values = df_encoded.sum(numeric_only=True).round(4)
 
-st.info("Fisier salvat: medical_students_statsmodels_regression.csv")
+    st.dataframe(
+        sum_values.reset_index().rename(
+            columns={
+                "index": "Coloana",
+                0: "Suma"
+            }
+        ),
+        use_container_width=True
+    )
 
-st.header("12. Salvarea datasetului final")
+    statistics_df = pd.DataFrame({
+        "Media": mean_values,
+        "Mediana": median_values,
+        "Suma": sum_values
+    })
 
-df.to_csv(
-    "medical_students_dataset_processed.csv",
-    index=False
-)
+    statistics_df.to_csv("medical_students_statistics.csv")
 
-st.success("Fisierul final a fost salvat: medical_students_dataset_processed.csv")
+
+if option == "Grupare si agregare":
+
+    st.header("7. Grupare si agregare")
+
+    st.subheader("Agregare pe gen si fumat")
+
+    agg_gender_smoking = df_encoded.groupby(
+        ["Gender", "Smoking"]
+    )[[
+        "BMI",
+        "Heart Rate",
+        "Blood Pressure",
+        "Cholesterol"
+    ]].agg([
+        "mean",
+        "sum",
+        "min",
+        "max",
+        "std"
+    ]).round(4)
+
+    st.dataframe(
+        agg_gender_smoking,
+        use_container_width=True
+    )
+
+    agg_gender_smoking.to_csv("medical_students_group_gender_smoking.csv")
+
+    st.subheader("Agregare pe diabet si gen")
+
+    agg_diabetes_gender = df_encoded.groupby(
+        ["Diabetes", "Gender"]
+    )[[
+        "BMI",
+        "Blood Pressure",
+        "Cholesterol"
+    ]].agg([
+        "mean",
+        "sum",
+        "min",
+        "max",
+        "std"
+    ]).round(4)
+
+    st.dataframe(
+        agg_diabetes_gender,
+        use_container_width=True
+    )
+
+    agg_diabetes_gender.to_csv("medical_students_group_diabetes_gender.csv")
+
+    st.subheader("Agregare pe grupe de varsta")
+
+    df_age_groups = df_encoded.copy()
+
+    bins = [0, 20, 30, 40, 100]
+    labels = ["sub 20", "20-30", "30-40", "peste 40"]
+
+    df_age_groups["Age Group"] = pd.cut(
+        df_age_groups["Age"],
+        bins=bins,
+        labels=labels,
+        right=False
+    )
+
+    age_group_agg = df_age_groups.groupby(
+        "Age Group",
+        observed=False
+    )[[
+        "BMI",
+        "Heart Rate",
+        "Blood Pressure",
+        "Cholesterol"
+    ]].agg([
+        "mean",
+        "sum",
+        "count",
+        "std"
+    ]).round(4)
+
+    st.dataframe(
+        age_group_agg,
+        use_container_width=True
+    )
+
+    age_group_agg.to_csv("medical_students_group_age.csv")
+
+    st.subheader("Numar de fumatori si persoane cu diabet pe grupe de varsta")
+
+    count_smoke_diabetes = df_age_groups.groupby(
+        "Age Group",
+        observed=False
+    )[[
+        "Smoking",
+        "Diabetes"
+    ]].sum().round(4)
+
+    st.dataframe(
+        count_smoke_diabetes,
+        use_container_width=True
+    )
+
+    count_smoke_diabetes.to_csv("medical_students_smoking_diabetes_age.csv")
+
+
+if option == "Histograma":
+
+    st.header("8. Histograma")
+
+    numeric_columns_list = df_encoded.select_dtypes(
+        include=np.number
+    ).columns.tolist()
+
+    selected_column = st.selectbox(
+        "Alege o coloana numerica:",
+        numeric_columns_list
+    )
+
+    fig3, ax3 = plt.subplots(figsize=(4, 2.2))
+
+    ax3.hist(
+        df_encoded[selected_column].dropna(),
+        bins=15
+    )
+
+    ax3.set_title(f"Distributia variabilei {selected_column}")
+
+    ax3.set_xlabel(selected_column)
+
+    ax3.set_ylabel("Frecventa")
+
+    st.pyplot(fig3)
+
+    plt.close()
+
+
+if option == "Prelucrari avansate":
+
+    st.header("9. Prelucrari avansate")
+
+    st.subheader("Clusterizare PCA + KMeans")
+
+    numeric_cols_for_models = [
+        "Height",
+        "Weight",
+        "BMI",
+        "Temperature",
+        "Heart Rate",
+        "Blood Pressure",
+        "Cholesterol"
+    ]
+
+    numeric_cols_for_models = [
+        col for col in numeric_cols_for_models
+        if col in df_standardized.columns
+    ]
+
+    k = st.slider(
+        "Alege numarul de clustere:",
+        2,
+        10,
+        3
+    )
+
+    pca = PCA(n_components=2)
+
+    data_for_cluster = df_standardized[numeric_cols_for_models]
+
+    reduced_data = pca.fit_transform(data_for_cluster)
+
+    kmeans = KMeans(
+        n_clusters=k,
+        random_state=42
+    )
+
+    cluster_labels = kmeans.fit_predict(reduced_data)
+
+    cluster_df = pd.DataFrame({
+        "PCA1": reduced_data[:, 0],
+        "PCA2": reduced_data[:, 1],
+        "Cluster": cluster_labels
+    })
+
+    cluster_df.to_csv("medical_students_pca_kmeans.csv", index=False)
+
+    fig4, ax4 = plt.subplots(figsize=(4.5, 3))
+
+    scatter = ax4.scatter(
+        reduced_data[:, 0],
+        reduced_data[:, 1],
+        c=cluster_labels,
+        cmap="viridis",
+        s=8
+    )
+
+    ax4.set_title("Rezultatul clusterizarii PCA + KMeans")
+
+    ax4.set_xlabel("Componenta principala 1")
+
+    ax4.set_ylabel("Componenta principala 2")
+
+    st.pyplot(fig4)
+
+    plt.close()
+
+    st.write("Centrele clusterelor:")
+
+    st.dataframe(
+        pd.DataFrame(kmeans.cluster_centers_),
+        use_container_width=True
+    )
+
+    st.subheader("Regresie logistica pentru predictia diabetului")
+
+    X_logreg = df_standardized.drop(
+        columns=["Diabetes"],
+        errors="ignore"
+    )
+
+    y_logreg = df_encoded["Diabetes"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_logreg,
+        y_logreg,
+        test_size=0.2,
+        random_state=42
+    )
+
+    logreg = LogisticRegression(
+        max_iter=1000,
+        class_weight="balanced"
+    )
+
+    logreg.fit(
+        X_train,
+        y_train
+    )
+
+    y_pred = logreg.predict(X_test)
+
+    accuracy = accuracy_score(
+        y_test,
+        y_pred
+    )
+
+    st.write("Acuratetea modelului:")
+
+    st.metric(
+        "Accuracy",
+        round(accuracy, 4)
+    )
+
+    conf_matrix = confusion_matrix(
+        y_test,
+        y_pred
+    )
+
+    conf_matrix_df = pd.DataFrame(
+        conf_matrix,
+        columns=["Predicted 0", "Predicted 1"],
+        index=["Real 0", "Real 1"]
+    )
+
+    st.write("Matricea de confuzie:")
+
+    st.dataframe(
+        conf_matrix_df,
+        use_container_width=True
+    )
+
+    conf_matrix_df.to_csv("medical_students_logistic_confusion_matrix.csv")
+
+    report = classification_report(
+        y_test,
+        y_pred,
+        output_dict=True
+    )
+
+    report_df = pd.DataFrame(report).transpose().round(4)
+
+    st.write("Classification report:")
+
+    st.dataframe(
+        report_df,
+        use_container_width=True
+    )
+
+    report_df.to_csv("medical_students_logistic_report.csv")
+
+    st.subheader("Random Forest pentru predictia diabetului")
+
+    rf_model = RandomForestClassifier(
+        n_estimators=100,
+        random_state=42,
+        class_weight="balanced"
+    )
+
+    rf_model.fit(
+        X_train,
+        y_train
+    )
+
+    y_pred_rf = rf_model.predict(X_test)
+
+    accuracy_rf = accuracy_score(
+        y_test,
+        y_pred_rf
+    )
+
+    st.metric(
+        "Accuracy Random Forest",
+        round(accuracy_rf, 4)
+    )
+
+    conf_matrix_rf = confusion_matrix(
+        y_test,
+        y_pred_rf
+    )
+
+    conf_matrix_rf_df = pd.DataFrame(
+        conf_matrix_rf,
+        columns=["Predicted 0", "Predicted 1"],
+        index=["Real 0", "Real 1"]
+    )
+
+    st.dataframe(
+        conf_matrix_rf_df,
+        use_container_width=True
+    )
+
+    conf_matrix_rf_df.to_csv("medical_students_random_forest_confusion_matrix.csv")
+
+    report_rf = classification_report(
+        y_test,
+        y_pred_rf,
+        output_dict=True
+    )
+
+    report_rf_df = pd.DataFrame(report_rf).transpose().round(4)
+
+    st.dataframe(
+        report_rf_df,
+        use_container_width=True
+    )
+
+    report_rf_df.to_csv("medical_students_random_forest_report.csv")
+
+    st.subheader("Regresie liniara multipla cu Statsmodels")
+
+    X_multi = df_encoded[[
+        "Age",
+        "BMI",
+        "Heart Rate"
+    ]]
+
+    y_multi = df_encoded["Cholesterol"]
+
+    X_multi = sm.add_constant(X_multi)
+
+    model_multi = sm.OLS(
+        y_multi,
+        X_multi
+    ).fit()
+
+    st.text(
+        model_multi.summary()
+    )
+
+    statsmodels_params = pd.DataFrame({
+        "Coeficient": model_multi.params,
+        "P_value": model_multi.pvalues
+    })
+
+    statsmodels_params.to_csv("medical_students_statsmodels_regression.csv")
+
+
+if option == "Interactiuni coloane":
+
+    st.header("10. Interactiuni coloane DataFrame")
+
+    if "df_interactive" not in st.session_state:
+        st.session_state.df_interactive = df_standardized.copy()
+
+    df_interactive = st.session_state.df_interactive
+
+    st.subheader("DataFrame curent")
+
+    st.dataframe(
+        df_interactive.head(50),
+        use_container_width=True
+    )
+
+    col_names = list(df_interactive.columns)
+
+    selected_col = st.selectbox(
+        "Selecteaza o coloana:",
+        col_names
+    )
+
+    st.subheader(f"Operatii pentru coloana: {selected_col}")
+
+    new_name = st.text_input(
+        "Introdu noul nume pentru coloana:",
+        value=selected_col
+    )
+
+    if st.button("Redenumeste coloana"):
+
+        if new_name and new_name != selected_col:
+
+            st.session_state.df_interactive = (
+                st.session_state.df_interactive.rename(
+                    columns={selected_col: new_name}
+                )
+            )
+
+            st.success("Coloana a fost redenumita.")
+
+            st.rerun()
+
+        else:
+            st.info("Noul nume trebuie sa fie diferit de cel curent.")
+
+    if st.button("Sterge coloana"):
+
+        st.session_state.df_interactive = (
+            st.session_state.df_interactive.drop(
+                columns=[selected_col]
+            )
+        )
+
+        st.success("Coloana a fost stearsa.")
+
+        st.rerun()
+
+    if st.button("Afiseaza numarul de valori lipsa"):
+
+        missing_count = (
+            st.session_state.df_interactive[selected_col]
+            .isna()
+            .sum()
+        )
+
+        st.info(
+            f"Coloana {selected_col} are {missing_count} valori lipsa."
+        )
+
+
+if option == "Vizualizare outliers":
+
+    st.header("11. Vizualizare outliers")
+
+    columns_for_boxplot = [
+        "Height",
+        "Weight",
+        "BMI",
+        "Temperature",
+        "Heart Rate",
+        "Blood Pressure",
+        "Cholesterol"
+    ]
+
+    columns_for_boxplot = [
+        col for col in columns_for_boxplot
+        if col in df_encoded.columns
+    ]
+
+    selected_box_cols = st.multiselect(
+        "Alege coloanele pentru boxplot:",
+        columns_for_boxplot,
+        default=columns_for_boxplot[:3]
+    )
+
+    if selected_box_cols:
+
+        for col in selected_box_cols:
+
+            fig, ax = plt.subplots(figsize=(4, 2))
+
+            sns.boxplot(
+                x=df_encoded[col],
+                ax=ax
+            )
+
+            ax.set_title(f"Boxplot pentru {col}")
+
+            st.pyplot(fig)
+
+            plt.close()
